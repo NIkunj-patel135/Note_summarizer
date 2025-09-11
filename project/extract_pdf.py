@@ -1,7 +1,7 @@
 import pdfplumber
 
 
-with pdfplumber.open("sample.pdf") as pdf:
+with pdfplumber.open("Exercise2_PDF.pdf") as pdf:
     text = ""
     for page in pdf.pages:
         text += page.extract_text() + "\n"

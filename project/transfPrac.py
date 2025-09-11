@@ -5,7 +5,7 @@ import time
 start_time = time.time()
 device = 0 if torch.cuda.is_available() else -1
 
-summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6", device=device)
+summarizer = pipeline("summarization", model="philschmid/bart-large-cnn-samsum", device=device)
 
 ARTICLE = """ Lorem ipsum
 Lorem ipsum dolor sit amet, consectetur adipiscing
@@ -21,13 +21,6 @@ tortor quis risus auctor condimentum. Morbi in ullamcorper elit. Nulla iaculis t
 mauris tempus fringilla.
 Maecenas mauris lectus, lobortis et purus mattis, blandit dictum tellus.
  Maecenas non lorem quis tellus placerat varius.
- Nulla facilisi.
- Aenean congue fringilla justo ut aliquam.
-
-Mauris id ex erat. Nunc vulputate neque vitae justo facilisis, non condimentum ante
-sagittis.
- Morbi viverra semper lorem nec molestie.
- Maecenas tincidunt est efficitur ligula euismod, sit amet ornare est vulputate.
 
 """
 print(summarizer(ARTICLE, max_length=200, min_length=90, do_sample=False))
