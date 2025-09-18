@@ -1,5 +1,6 @@
 import streamlit as st
 import re
+import pyperclip
 from transformers import pipeline, AutoTokenizer
 import torch
 import pdfplumber
@@ -14,8 +15,42 @@ def load_summarizer():
 tokenizer = AutoTokenizer.from_pretrained("sshleifer/distilbart-cnn-12-6")
 model = load_summarizer()
 
-def chunk_text(text, max_tokens=900, overlap=50):  # max_tokens for safety margin
+# def chunk_text(text, max_tokens=900, overlap=50):  # max_tokens for safety margin
    
+#     tokens = tokenizer.encode(text, add_special_tokens=False)
+#     chunks = []
+#     start = 0
+
+#     while start < len(tokens):
+#         # Calculate end position
+#         end = min(start + max_tokens, len(tokens))
+        
+#         # Extract chunk tokens
+#         chunk_tokens = tokens[start:end]
+        
+#         # Decode to text
+#         chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+        
+#         # Verify the chunk doesn't exceed limits when re-tokenized
+#         # (Sometimes decoding and re-encoding can change token count slightly)
+#         verification_tokens = tokenizer.encode(chunk_text, add_special_tokens=True)
+#         if len(verification_tokens) > 1024:
+#             # If it exceeds, reduce the chunk size
+#             reduced_end = start + max_tokens - 100  # Reduce by 100 tokens
+#             chunk_tokens = tokens[start:reduced_end]
+#             chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+        
+#         chunks.append(chunk_text)
+        
+#         # Move start position with overlap
+#         start = end - overlap
+        
+#         # Ensure we don't get stuck in infinite loop
+#         if start >= end - overlap:
+#             start = end
+
+#     return chunks
+def chunk_text(text, max_tokens=800, overlap=100):  # Reduced max_tokens for better safety
     tokens = tokenizer.encode(text, add_special_tokens=False)
     chunks = []
     start = 0
@@ -30,26 +65,27 @@ def chunk_text(text, max_tokens=900, overlap=50):  # max_tokens for safety margi
         # Decode to text
         chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
         
-        # Verify the chunk doesn't exceed limits when re-tokenized
-        # (Sometimes decoding and re-encoding can change token count slightly)
+        # Double-check token count with special tokens
         verification_tokens = tokenizer.encode(chunk_text, add_special_tokens=True)
-        if len(verification_tokens) > 1024:
-            # If it exceeds, reduce the chunk size
-            reduced_end = start + max_tokens - 100  # Reduce by 100 tokens
-            chunk_tokens = tokens[start:reduced_end]
-            chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
         
-        chunks.append(chunk_text)
+        # If still too large, reduce further
+        while len(verification_tokens) > 1024 and len(chunk_tokens) > 100:
+            chunk_tokens = chunk_tokens[:-50]  # Remove 50 tokens at a time
+            chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+            verification_tokens = tokenizer.encode(chunk_text, add_special_tokens=True)
+        
+        # Only add non-empty chunks
+        if chunk_text.strip():
+            chunks.append(chunk_text)
         
         # Move start position with overlap
         start = end - overlap
         
-        # Ensure we don't get stuck in infinite loop
-        if start >= end - overlap:
-            start = end
+        # Prevent infinite loop
+        if start >= end:
+            break
 
     return chunks
-
 
 
 def extract_pdf():
@@ -101,67 +137,208 @@ if "input_text_value" not in st.session_state:
 if "summarized_text" not in st.session_state:
     st.session_state.summarized_text = ""
 
-def update_summarized_text():
-    size_option = st.session_state["summary_length"]
+# def update_summarized_text():
+#     size_option = st.session_state["summary_length"]
 
+#     size_map = {
+#         "Very Small": 0.1,    
+#         "Small": 0.2,          
+#         "Medium": 0.3,       
+#         "Large": 0.4         
+#     }
+
+#     size_ratio = size_map[size_option]
+#     text = clean_text(st.session_state.input_text_value)
+
+#     total_tokens = len(tokenizer.encode(text, add_special_tokens=True))
+
+#     if total_tokens <= 1024:
+#         # Text is small enough to summarize directly
+#         max_len = min(int(total_tokens * size_ratio), 512)
+#         min_len = max(30, int(max_len * 0.6))
+        
+#         try:
+#             summary = model(
+#                 text,
+#                 max_length=max_len,
+#                 min_length=min_len,
+#                 do_sample=False
+#             )[0]['summary_text']
+#             st.session_state.summarized_text = summary
+#         except Exception as e:
+#             st.error(f"Error during summarization: {e}")
+#             st.session_state.summarized_text = ""
+#     else:
+#         # Text needs to be chunked
+#         chunks = chunk_text(text)
+#         final_summaries = []
+        
+#         for i, chunk in enumerate(chunks):
+#             try:
+#                 # Calculate token count for this chunk
+#                 num_tokens = len(tokenizer.encode(chunk, add_special_tokens=True))
+                
+#                 # Skip if chunk is too large (shouldn't happen with our chunking, but safety check)
+#                 if num_tokens > 1024:
+#                     continue
+                
+#                 # Calculate appropriate summary lengths based on compression ratio
+#                 max_len = min(int(num_tokens * size_ratio), 142)
+#                 min_len = max(10, int(max_len * 0.5))
+                
+#                 summary = model(chunk, max_length=max_len, min_length=min_len, do_sample=False)
+#                 final_summaries.append(summary[0]['summary_text'])
+                
+#             except Exception as e:
+#                 st.error(f"Error processing chunk {i+1}: {e}")
+#                 continue
+        
+#         # Join all summaries
+#         st.session_state.summarized_text = " ".join(final_summaries)
+ 
+def update_summarized_text():
+    text = clean_text(st.session_state.input_text_value)
+    
+    # Check if text is empty
+    if not text.strip():
+        st.session_state.summarized_text = ""
+        return
+    
+    size_option = st.session_state["summary_length"]
+    
+    # More aggressive compression ratios for actual summarization
     size_map = {
-        "Very Small": 0.1,    
-        "Small": 0.2,          
-        "Medium": 0.3,       
-        "Large": 0.4         
+        "Very Small": 0.12,   # 8% of original - very concise
+        "Small": 0.18,        # 12% of original
+        "Medium": 0.25,       # 18% of original  
+        "Large": 0.35         # 25% of original
     }
 
-    size_ratio = size_map[size_option]
-    text = clean_text(st.session_state.input_text_value)
-
+    compression_ratio = size_map[size_option]
+    
     total_tokens = len(tokenizer.encode(text, add_special_tokens=True))
+    print(f"Total tokens in input: {total_tokens}")
 
     if total_tokens <= 1024:
         # Text is small enough to summarize directly
-        max_len = min(int(total_tokens * size_ratio), 142)
-        min_len = max(10, int(max_len * 0.5))
+        
+        # Calculate lengths more aggressively for proper summarization
+        input_word_count = len(text.split())
+        target_word_count = max(15, int(input_word_count * compression_ratio))
+        
+        # Convert word count to approximate token count (1 word ≈ 1.3 tokens)
+        max_len = min(int(target_word_count * 1.3), 142)  # DistilBART max
+        min_len = max(10, int(max_len * 0.7))  # Ensure minimum is close to max
+        
+        # print(f"Input words: {input_word_count}, Target words: {target_word_count}")
+        # print(f"Direct summarization - max_len: {max_len}, min_len: {min_len}")
         
         try:
             summary = model(
                 text,
                 max_length=max_len,
                 min_length=min_len,
-                do_sample=False
+                do_sample=False,
+                truncation=True,
+                clean_up_tokenization_spaces=True,
+                # Add these parameters for better summarization
+                no_repeat_ngram_size=3,  # Avoid repetitive phrases
+                encoder_no_repeat_ngram_size=3,
+                early_stopping=True
             )[0]['summary_text']
+            
             st.session_state.summarized_text = summary
+            # print(f"Summary generated: '{summary}'")
+            
         except Exception as e:
             st.error(f"Error during summarization: {e}")
+            # print(f"Summarization error: {e}")
             st.session_state.summarized_text = ""
     else:
         # Text needs to be chunked
-        chunks = chunk_text(text)
+        chunks = chunk_text(text, max_tokens=700, overlap=150)  # Smaller chunks, more overlap
         final_summaries = []
+        
+        # print(f"Chunking into {len(chunks)} chunks")
         
         for i, chunk in enumerate(chunks):
             try:
-                # Calculate token count for this chunk
                 num_tokens = len(tokenizer.encode(chunk, add_special_tokens=True))
+                # print(f"Chunk {i+1}: {num_tokens} tokens")
                 
-                # Skip if chunk is too large (shouldn't happen with our chunking, but safety check)
-                if num_tokens > 1024:
+                if num_tokens > 1024 or num_tokens < 30:
+                    # print(f"Skipping chunk {i+1} - inappropriate size ({num_tokens} tokens)")
                     continue
                 
-                # Calculate appropriate summary lengths based on compression ratio
-                max_len = min(int(num_tokens * size_ratio), 142)
-                min_len = max(10, int(max_len * 0.5))
+                # More aggressive summarization for chunks
+                chunk_word_count = len(chunk.split())
+                target_words = max(8, int(chunk_word_count * compression_ratio))
                 
-                summary = model(chunk, max_length=max_len, min_length=min_len, do_sample=False)
-                final_summaries.append(summary[0]['summary_text'])
+                max_len = min(int(target_words * 1.3), 100)  # Smaller max for chunks
+                min_len = max(8, int(max_len * 0.6))
+                
+                # print(f"Chunk {i+1} - words: {chunk_word_count}, target: {target_words}, max_len: {max_len}, min_len: {min_len}")
+                
+                summary = model(
+                    chunk, 
+                    max_length=max_len, 
+                    min_length=min_len, 
+                    do_sample=False,
+                    truncation=True,
+                    clean_up_tokenization_spaces=True,
+                    no_repeat_ngram_size=2,
+                    early_stopping=True
+                )[0]['summary_text']
+                
+                final_summaries.append(summary)
+                # print(f"Chunk {i+1} summary: '{summary}'")
                 
             except Exception as e:
-                st.error(f"Error processing chunk {i+1}: {e}")
+                print(f"Error processing chunk {i+1}: {e}")
                 continue
         
-        # Join all summaries
-        st.session_state.summarized_text = " ".join(final_summaries)
+        # Combine and potentially re-summarize
+        if final_summaries:
+            if len(final_summaries) == 1:
+                st.session_state.summarized_text = final_summaries[0]
+            else:
+                # Join summaries
+                combined_summary = " ".join(final_summaries)
+                combined_word_count = len(combined_summary.split())
+                
+                # print(f"Combined summary words: {combined_word_count}")
+                
+                # If combined summary is still long, summarize again
+                if combined_word_count > len(text.split()) * 0.3:  # If > 30% of original
+                    try:
+                        target_final_words = max(20, int(len(text.split()) * compression_ratio))
+                        max_len = min(int(target_final_words * 1.3), 142)
+                        min_len = max(15, int(max_len * 0.7))
+                        
+                        # print(f"Final summarization - target: {target_final_words}, max_len: {max_len}, min_len: {min_len}")
+                        
+                        final_summary = model(
+                            combined_summary,
+                            max_length=max_len,
+                            min_length=min_len,
+                            do_sample=False,
+                            truncation=True,
+                            clean_up_tokenization_spaces=True,
+                            no_repeat_ngram_size=3,
+                            early_stopping=True
+                        )[0]['summary_text']
+                        
+                        st.session_state.summarized_text = final_summary
+                    except Exception as e:
+                        print(f"Error in final summarization: {e}")
+                        st.session_state.summarized_text = combined_summary
+                else:
+                    st.session_state.summarized_text = combined_summary
+        else:
+            st.session_state.summarized_text = "Unable to generate summary. Please try with different text."   
     
-    
-
+def copyFunction():
+    pyperclip.copy(st.session_state["summarized_notes"])
 
 st.markdown(
     """
@@ -298,8 +475,16 @@ with col2:
         help="Adjust the length of the generated summary.",
         key="summary_length",
     )
-
-    st.caption(f"No. of words = {len(summarized_text.split())}")
+    in_col1, in_col2 = st.columns([6,1])
+    with in_col1:
+        st.caption(f"No. of words = {len(summarized_text.split())}")
+    with in_col2:
+        st.button(
+            "Copy",
+            type="secondary",
+            on_click= copyFunction
+        )
+    
 
 
 
